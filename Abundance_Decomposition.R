@@ -1,0 +1,216 @@
+rm(list=ls())
+library(MCMCglmm)
+library(ggplot2)
+library(riverplot)
+library(tidyverse)
+library(RColorBrewer)
+library("colorspace")
+
+#############################################
+#### Model: Variance decomposition model ####
+#############################################
+
+cater_habitat <- read.csv("~/cater_habitat_data.csv")
+load("~/AbundVar23.RData")  
+summary(AbundVar23)
+
+#### Checking model fits the data and converged ####
+
+plot(AbundVar23) 
+
+AbundVar23.Sim<-simulate(AbundVar23,nsim=1000)
+
+par(mfcol=c(1,1))
+hist(apply(AbundVar23.Sim,2,sum), breaks=100) #histogram of simulation predictions for total abundance
+abline(v=sum(cater_habitat$caterpillars),col=2) # red line for observed value in data
+hist(apply(AbundVar23.Sim,2,sum), breaks=10000, xlim=c(0,100000))
+abline(v=sum(cater_habitat$caterpillars),col=2) # red line for observed value in data
+
+propzero <- function(x){return(length(which(x==0))/length(x))}  # function for proportion of zeros
+hist(apply(AbundVar23.Sim,2,propzero), breaks=50) # histogram of proportion of zeros in simulated data
+abline(v=propzero(cater_habitat$caterpillars), col="red") # red line for observed proportion in data
+
+#### Variance from fixed effects ####
+V<-cov(as.matrix(AbundVar23$X[,2:3]))
+R2<-apply(AbundVar23$Sol[,2:3], 1, function(x){x%*%V%*%x}) # not actual R2- variance explained by fixed effects (marginal)
+
+Variances <- data.frame(AbundVar23$VCV)
+Variances$Fixed <- R2
+
+# Variance explained by random terms
+VarProp.df <- data.frame(Term=c(colnames(Variances))) #dataframe with column for each random term 
+
+## loop for mean proportion of variance explained by each term with CIs
+for(i in 1:length(VarProp.df$Term)) {   
+  VarProp.df$Proportion[i] <- mean(Variances[,i]/rowSums(Variances))
+  A <- HPDinterval(mcmc(Variances[,i]/rowSums(Variances)))
+  VarProp.df$ProportionLCI[i] <- A[1]
+  VarProp.df$ProportionUCI[i] <- A[2]
+} 
+
+# correcting names
+VarProp.df$Term <- gsub("recorder","Recorder", VarProp.df$Term)
+VarProp.df$Term <- gsub("yearday","Day", VarProp.df$Term)
+VarProp.df$Term <- gsub("siteyear","SiteYear", VarProp.df$Term)
+VarProp.df$Term <- gsub("siteday","SiteDay", VarProp.df$Term)
+VarProp.df$Term <- gsub("site","Site", VarProp.df$Term)
+VarProp.df$Term <- gsub("year","Year", VarProp.df$Term)
+VarProp.df$Term <- gsub("treeID","TreeID", VarProp.df$Term)
+VarProp.df$Term <- gsub("tree.species","TreeTaxa", VarProp.df$Term)
+VarProp.df$Term <- gsub("units","Residual", VarProp.df$Term)
+
+# percentage rather than proportion
+VarProp.df$Percentage <- VarProp.df$Proportion*100
+VarProp.df$Percentage <- round(VarProp.df$Percentage, digits=2)
+VarProp.df$Data <- "Variance"
+
+
+#### Riverplot package ####
+
+
+SpatialProp <- sum(VarProp.df[5:7,5])
+SpatiotemporalProp <- sum(VarProp.df[3:4,5])
+TemporalProp <- VarProp.df[2,5]+VarProp.df[8,5]+VarProp.df[10,5]
+OtherProp <- VarProp.df[1,5]+VarProp.df[9,5]
+RecorderProp <- VarProp.df[1,5]
+YearProp <- VarProp.df[2,5]
+YearSiteProp <- VarProp.df[3,5]
+DaySiteYearProp <- VarProp.df[4,5]
+SiteProp <- VarProp.df[5,5]
+TreeProp <- VarProp.df[6,5]
+TreeTaxonProp <- VarProp.df[7,5]
+DayYearProp <- VarProp.df[8,5]
+ResidualProp <- VarProp.df[9,5]
+FixedProp <- VarProp.df[10,5]
+
+edges <- data.frame( 
+  N1=   c("Total Variance", "Total Variance",   "Total Variance", "Total Variance", "Spatial", "Spatial",     "Spatial", "Spatio-\ntemporal", "Spatio-\ntemporal", "Temporal", "Temporal",     "Temporal",  "Other",      "Other"),
+  N2=   c("Spatial",        "Spatio-\ntemporal", "Temporal",       "Other",          "\nSite",  "Tree\nTaxon", "\nTree",  "Site\nYear",        "Day Site\nYear",    "\nYear",   "Date+\nDate²", "Day\nYear", "\nRecorder", "\nResidual"),
+  Value=c(SpatialProp,     SpatiotemporalProp,   TemporalProp,     OtherProp,        SiteProp,  TreeTaxonProp, TreeProp,  YearSiteProp,        DaySiteYearProp,     YearProp,   FixedProp,      DayYearProp, RecorderProp, ResidualProp)
+)
+
+edges$N2<-paste(edges$N2, '\n',  paste0(edges$Value, '%')) 
+edges$N1<-c(rep('Total Variance', 4),
+            rep(edges$N2[1], 3),
+            rep(edges$N2[2], 2),
+            rep(edges$N2[3], 3), 
+            rep(edges$N2[4], 2)   
+)
+
+
+nodes <- data.frame(
+  ID=c(as.character(edges$N1), 
+       as.character(edges$N2)) %>% unique()
+)
+
+nodes$x=as.integer(c(1,2,2,2,2,3,3,3,3,3,3,3,3,3,3))
+nodes$y=as.numeric(c(9.5,2.3,7.5,13,18,0,2,4,6.5,8.5,11.5,14,16,18.5,20.5))
+rownames(nodes) = nodes$ID
+
+
+palette = paste0(rainbow_hcl(n=22, c=30), "95")
+styles = lapply(nodes$y, function(n) {list(col = palette[n+1], lty = 0, textcol = "black")})
+names(styles) = nodes$ID
+
+rp <- list(nodes = nodes, edges = edges, styles = styles)
+class(rp) <- c(class(rp), "riverplot")
+par(cex=0.95)
+plot(rp, plot_area = 0.95, yscale=0.08, nodewidth = 4.6) #saved as 10"x5" (or 12x6 now)
+
+## Table of results ##
+Spatial <- mcmc((Variances[,5]+Variances[,6]+Variances[,7])/rowSums(Variances))
+Spatiotemp <- mcmc((Variances[,3]+Variances[,4])/rowSums(Variances))
+Temp <- mcmc((Variances[,2]+Variances[,8]+Variances[,10])/rowSums(Variances))
+Other <- mcmc((Variances[,1]+Variances[,9])/rowSums(Variances))
+
+VarProp.df[11,] <- c("Spatial", mean(Spatial), HPDinterval(Spatial)[1], HPDinterval(Spatial)[2], mean(Spatial)*100, "Summary")
+VarProp.df[12,] <- c("Spatiotemp", mean(Spatiotemp), HPDinterval(Spatiotemp)[1], HPDinterval(Spatiotemp)[2], mean(Spatiotemp)*100, "Summary")
+VarProp.df[13,] <- c("Temp", mean(Temp), HPDinterval(Temp)[1], HPDinterval(Temp)[2], mean(Temp)*100, "Summary")
+VarProp.df[14,] <- c("Other", mean(Other), HPDinterval(Other)[1], HPDinterval(Other)[2], mean(Other)*100, "Summary")
+VarProp.df$Percentage <- round(as.numeric(VarProp.df$Percentage), digits=2)
+
+VarProp.df$Proportion <- round(as.numeric(VarProp.df$Proportion),4)
+VarProp.df$ProportionLCI<- round(as.numeric(VarProp.df$ProportionLCI),4)
+VarProp.df$ProportionUCI <- round(as.numeric(VarProp.df$ProportionUCI),4)
+
+############################
+#### Model output table ####
+############################
+
+#for random terms use posterior mode and fixed terms mean
+
+####fixed effects
+fixed<-rbind(
+  c("Intercept",paste(round(mean(AbundVar23$Sol[,1]),3)," (",
+                      round(HPDinterval(AbundVar23$Sol[,1])[1],3)," - ",
+                      round(HPDinterval(AbundVar23$Sol[,1])[2],3),")",sep=""),round(effectiveSize(AbundVar23$Sol[,1]))),
+  
+  c("Date (scaled)",paste(round(mean(AbundVar23$Sol[,2]),3)," (",
+                          round(HPDinterval(AbundVar23$Sol[,2])[1],3)," - ",
+                          round(HPDinterval(AbundVar23$Sol[,2])[2],3),")",sep=""),round(effectiveSize(AbundVar23$Sol[,2]))),
+  
+  c("Date² (scaled)",paste(round(mean(AbundVar23$Sol[,3]),3)," (",
+                           round(HPDinterval(AbundVar23$Sol[,3])[1],3)," - ",
+                           round(HPDinterval(AbundVar23$Sol[,3])[2],3),")",sep=""),round(effectiveSize(AbundVar23$Sol[,3]))))
+
+####random terms
+column<-1
+recorder<-c("Recorder",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                             round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                             round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+            round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-2
+year<-c("Year",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                     round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                     round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+        round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-3
+siteyear<-c("Site Year",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                              round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                              round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+            round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-4
+siteday<-c("Site Day",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                            round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                            round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+           round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-5
+site<-c("Site",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                     round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                     round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+        round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-6
+treeID<-c("Tree ID",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                          round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                          round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+          round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-7
+treetaxa<-c("Tree Taxa",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                              round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                              round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+            round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-8
+day<-c("Day",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                   round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                   round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+       round(effectiveSize(AbundVar23$VCV[, column])))
+
+column<-9
+residual<-c("Residual",paste(round(posterior.mode(AbundVar23$VCV[, column]),3)," (",
+                             round(HPDinterval(AbundVar23$VCV[, column])[1],3)," - ",
+                             round(HPDinterval(AbundVar23$VCV[, column])[2],3),")",sep=""),
+            round(effectiveSize(AbundVar23$VCV[, column])))
+
+
+random<-rbind(site,treeID,treetaxa,siteday,day,siteyear,year,recorder,residual)
+
+#write.table(rbind(c("Fixed Terms","",""),fixed,c("Random Terms","",""),random),"~/TableS2_AbundVar.txt",sep="\t",col.names=c("","Coefficient/Variance (Mean/mode and CI)","Effective sample size"),row.names=F)
+
+
